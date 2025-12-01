@@ -129,6 +129,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [check-release, build-push]
     if: needs.check-release.outputs.should_build == 'true'
+    outputs:
+      collect-ghcr-digests: ${{ steps.collect-ghcr-digests.outputs.digests_json }}
+      collect-dockerhub-digests: ${{ steps.collect-dockerhub-digests.outputs.digests_json }}
     permissions:
       contents: read
       packages: write
