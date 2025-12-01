@@ -184,8 +184,12 @@ jobs:
             | .digest
           ')
 
-          # Convert newline-separated list to JSON array for workflow matrix
-          JSON=$(printf '%s\n' "$DIGESTS" | jq -R . | jq -s .)
+          # Convert newline-separated list to JSON array for workflow matrix          
+          {
+            echo "digests_json<<EOF"
+            echo "$JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"          
 
           echo "digests_json=$JSON" >> "$GITHUB_OUTPUT"
                     
@@ -222,8 +226,12 @@ jobs:
           ')
 
           # Convert newline-separated list to JSON array for workflow matrix
-          JSON=$(printf '%s\n' "$DIGESTS" | jq -R . | jq -s .)
-
+          {
+            echo "digests_json<<EOF"
+            echo "$JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+          
           echo "digests_json=$JSON" >> "$GITHUB_OUTPUT"
 
       - name: Summary
