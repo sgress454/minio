@@ -135,8 +135,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@v4
 
@@ -258,6 +256,7 @@ jobs:
     permissions:
       id-token: write
       packages: write
+      attestations: write
     strategy:
       matrix:
         digest: ${{ fromJson(needs.merge-manifest.outputs.collect-ghcr-digests) }}
@@ -275,6 +274,7 @@ jobs:
       permissions:
         id-token: write
         packages: write
+        attestations: write
       strategy:
         matrix:
           digest: ${{ fromJson(needs.merge-manifest.outputs.collect-dockerhub-digests) }}
