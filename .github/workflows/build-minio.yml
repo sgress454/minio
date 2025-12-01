@@ -193,8 +193,6 @@ jobs:
             echo "$JSON"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"          
-
-          echo "digests_json=$JSON" >> "$GITHUB_OUTPUT"
                     
       - name: Create & publish manifest on ${{ env.DOCKER_REGISTRY }}
         run: |
@@ -235,8 +233,6 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
           
-          echo "digests_json=$JSON" >> "$GITHUB_OUTPUT"
-
       - name: Summary
         run: |
           echo "✅ Successfully built and published MinIO ${{ needs.check-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
