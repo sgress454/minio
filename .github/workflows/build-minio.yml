@@ -187,6 +187,11 @@ jobs:
             | .digest
           ')
 
+          JSON=$(printf '%s\n' "$DIGESTS" | jq -R . | jq -s .)
+
+          echo "DIGESTS: $DIGESTS"
+          echo "JSON: $JSON"
+
           # Convert newline-separated list to JSON array for workflow matrix          
           {
             echo "digests_json<<EOF"
@@ -225,6 +230,11 @@ jobs:
             | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest")  # skip attestations
             | .digest
           ')
+
+          JSON=$(printf '%s\n' "$DIGESTS" | jq -R . | jq -s .)          
+
+          echo "DIGESTS: $DIGESTS"
+          echo "JSON: $JSON"
 
           # Convert newline-separated list to JSON array for workflow matrix
           {
