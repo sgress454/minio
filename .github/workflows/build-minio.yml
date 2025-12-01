@@ -167,21 +167,27 @@ jobs:
           ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-amd64 \
           ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-arm64
 
-      - name: Get manifest digest (GHCR)
-        id: manifest_ghcr
+      - name: Collect GHCR image digests
+        id: collect-ghcr-digests
         run: |
           IMAGE="${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}"
-          DESCRIPTOR=$(docker buildx imagetools inspect --raw "$IMAGE")
-          DIGEST=$(echo "$DESCRIPTOR" | jq -r '.manifests[0].digest // .digest')
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
-          echo "GHCR manifest digest: $DIGEST"
 
-      - name: Attest provenance (GHCR)
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-name: ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.manifest_ghcr.outputs.digest }}
-          push-to-registry: true
+          # Pull raw OCI index
+          RAW=$(docker buildx imagetools inspect --raw "$IMAGE")
+
+          # Get real image digests. If this is a re-run, we may have attestations present,
+          # so filter those out.
+          DIGESTS=$(echo "$RAW" | jq -r '
+            .manifests[]
+            | select(.platform.architecture != null)          # keep manifests with a real platform
+            | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest")  # skip attestations
+            | .digest
+          ')
+
+          # Convert newline-separated list to JSON array for workflow matrix
+          JSON=$(printf '%s\n' "$DIGESTS" | jq -R . | jq -s .)
+
+          echo "digests_json=$JSON" >> "$GITHUB_OUTPUT"
                     
       - name: Create & publish manifest on ${{ env.DOCKER_REGISTRY }}
         run: |
@@ -198,21 +204,27 @@ jobs:
           ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-amd64 \
           ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-arm64
 
-      - name: Get manifest digest (DockerHub)
-        id: manifest_dh
+      - name: Collect Docker Hub image digests
+        id: collect-dockerhub-digests
         run: |
           IMAGE="${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}"
-          DESCRIPTOR=$(docker buildx imagetools inspect --raw "$IMAGE")
-          DIGEST=$(echo "$DESCRIPTOR" | jq -r '.manifests[0].digest // .digest')
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
-          echo "DockerHub manifest digest: $DIGEST"
 
-      - name: Attest provenance (Docker Hub)
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-name: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}
-          subject-digest: ${{ steps.manifest_dh.outputs.digest }}
-          push-to-registry: true
+          # Pull raw OCI index
+          RAW=$(docker buildx imagetools inspect --raw "$IMAGE")
+
+          # Get real image digests. If this is a re-run, we may have attestations present,
+          # so filter those out.
+          DIGESTS=$(echo "$RAW" | jq -r '
+            .manifests[]
+            | select(.platform.architecture != null)          # keep manifests with a real platform
+            | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest")  # skip attestations
+            | .digest
+          ')
+
+          # Convert newline-separated list to JSON array for workflow matrix
+          JSON=$(printf '%s\n' "$DIGESTS" | jq -R . | jq -s .)
+
+          echo "digests_json=$JSON" >> "$GITHUB_OUTPUT"
 
       - name: Summary
         run: |
@@ -222,3 +234,37 @@ jobs:
           echo "- GHCR: ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- Docker Hub: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- Latest: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+
+  attest-ghcr:
+    needs: merge-manifest
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+    strategy:
+      matrix:
+        digest: ${{ fromJson(needs.merge-manifest.outputs.collect-ghcr-digests) }}
+    steps:
+      - name: Attest provenance (GHCR)
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ matrix.digest }}
+          push-to-registry: true          
+
+  attest-dockerhub:
+      needs: merge-manifest
+      runs-on: ubuntu-latest
+      permissions:
+        id-token: write
+        packages: write
+      strategy:
+        matrix:
+          digest: ${{ fromJson(needs.merge-manifest.outputs.collect-dockerhub-digests) }}
+      steps:
+        - name: Attest provenance (Docker Hub)
+          uses: actions/attest-build-provenance@v1
+          with:
+            subject-name: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}
+            subject-digest: ${{ matrix.digest }}
+            push-to-registry: true                    
