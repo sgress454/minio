@@ -24,7 +24,7 @@ on:
 env:
   GITHUB_REGISTRY: ghcr.io
   DOCKER_REGISTRY: docker.io
-  IMAGE_NAME: coollabsio/minio
+  IMAGE_NAME: ${{ secrets.IMAGE_NAME_OVERRIDE || 'coollabsio/minio' }}
 
 jobs:
   check-release:
@@ -152,7 +152,6 @@ jobs:
           TAGS="-t ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}"
           TAGS="$TAGS -t ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.clean_version }}"
 
-          # Only add latest tag if skip_latest_tag is false
           if [ "${{ github.event.inputs.skip_latest_tag }}" != "true" ]; then
             TAGS="$TAGS -t ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
           fi
@@ -162,6 +161,22 @@ jobs:
           ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-amd64 \
           ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-arm64
 
+      - name: Get manifest digest (GHCR)
+        id: manifest_ghcr
+        run: |
+          IMAGE="${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}"
+          DESCRIPTOR=$(docker buildx imagetools inspect --raw "$IMAGE")
+          DIGEST=$(echo "$DESCRIPTOR" | jq -r '.manifests[0].digest // .digest')
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "GHCR manifest digest: $DIGEST"
+
+      - name: Attest provenance (GHCR)
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.manifest_ghcr.outputs.digest }}
+          push-to-registry: true
+                    
       - name: Create & publish manifest on ${{ env.DOCKER_REGISTRY }}
         run: |
           TAGS="-t ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}"
@@ -176,6 +191,22 @@ jobs:
           $TAGS \
           ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-amd64 \
           ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-arm64
+
+      - name: Get manifest digest (DockerHub)
+        id: manifest_dh
+        run: |
+          IMAGE="${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}"
+          DESCRIPTOR=$(docker buildx imagetools inspect --raw "$IMAGE")
+          DIGEST=$(echo "$DESCRIPTOR" | jq -r '.manifests[0].digest // .digest')
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+          echo "DockerHub manifest digest: $DIGEST"
+
+      - name: Attest provenance (Docker Hub)
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.manifest_dh.outputs.digest }}
+          push-to-registry: true
 
       - name: Summary
         run: |
