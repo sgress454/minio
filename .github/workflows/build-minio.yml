@@ -160,8 +160,8 @@ jobs:
           docker buildx imagetools create \
           $TAGS \
           ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-amd64 \
-          ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-arm64  
-                    
+          ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-arm64
+
       - name: Create & publish manifest on ${{ env.DOCKER_REGISTRY }}
         run: |
           TAGS="-t ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}"
