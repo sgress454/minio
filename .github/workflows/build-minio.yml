@@ -125,9 +125,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: [check-release, build-push]
     if: needs.check-release.outputs.should_build == 'true'
-    outputs:
-      collect-ghcr-digests: ${{ steps.collect-ghcr-digests.outputs.digests_json }}
-      collect-dockerhub-digests: ${{ steps.collect-dockerhub-digests.outputs.digests_json }}
     permissions:
       contents: read
       packages: write
@@ -163,33 +160,7 @@ jobs:
           docker buildx imagetools create \
           $TAGS \
           ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-amd64 \
-          ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-arm64
-
-      - name: Collect GHCR image digests
-        id: collect-ghcr-digests
-        run: |
-          IMAGE="${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}"
-
-          # Pull raw OCI index
-          RAW=$(docker buildx imagetools inspect --raw "$IMAGE")
-
-          # Get real image digests. If this is a re-run, we may have attestations present,
-          # so filter those out.
-          DIGESTS=$(echo "$RAW" | jq -r '
-            .manifests[]
-            | select(.platform.architecture != null)          # keep manifests with a real platform
-            | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest")  # skip attestations
-            | .digest
-          ')
-
-          JSON=$(printf '%s\n' "$DIGESTS" | jq -R . | jq -s .)
-
-          # Convert newline-separated list to JSON array for workflow matrix          
-          {
-            echo "digests_json<<EOF"
-            echo "$JSON"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"          
+          ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-arm64  
                     
       - name: Create & publish manifest on ${{ env.DOCKER_REGISTRY }}
         run: |
@@ -206,6 +177,24 @@ jobs:
           ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-amd64 \
           ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-arm64
 
+      - name: Summary
+        run: |
+          echo "✅ Successfully built and published MinIO ${{ needs.check-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Images published:" >> $GITHUB_STEP_SUMMARY
+          echo "- GHCR: ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Docker Hub: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Latest: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+
+  collect-digests:
+    needs: 
+      - merge-manifest
+      - check-release
+    runs-on: ubuntu-latest
+    outputs:
+      collect-ghcr-digests: ${{ steps.collect-ghcr-digests.outputs.digests_json }}
+      collect-dockerhub-digests: ${{ steps.collect-dockerhub-digests.outputs.digests_json }}
+    steps:
       - name: Collect Docker Hub image digests
         id: collect-dockerhub-digests
         run: |
@@ -231,18 +220,34 @@ jobs:
             echo "$JSON"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-          
-      - name: Summary
+      - name: Collect GHCR image digests
+        id: collect-ghcr-digests
         run: |
-          echo "✅ Successfully built and published MinIO ${{ needs.check-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Images published:" >> $GITHUB_STEP_SUMMARY
-          echo "- GHCR: ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Docker Hub: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Latest: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          IMAGE="${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}"
+
+          # Pull raw OCI index
+          RAW=$(docker buildx imagetools inspect --raw "$IMAGE")
+
+          # Get real image digests. If this is a re-run, we may have attestations present,
+          # so filter those out.
+          DIGESTS=$(echo "$RAW" | jq -r '
+            .manifests[]
+            | select(.platform.architecture != null)          # keep manifests with a real platform
+            | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest")  # skip attestations
+            | .digest
+          ')
+
+          JSON=$(printf '%s\n' "$DIGESTS" | jq -R . | jq -s .)
+
+          # Convert newline-separated list to JSON array for workflow matrix          
+          {
+            echo "digests_json<<EOF"
+            echo "$JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"        
 
   attest-ghcr:
-    needs: merge-manifest
+    needs: collect-digests
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -250,7 +255,7 @@ jobs:
       attestations: write
     strategy:
       matrix:
-        digest: ${{ fromJson(needs.merge-manifest.outputs.collect-ghcr-digests) }}
+        digest: ${{ fromJson(needs.collect-digests.outputs.collect-ghcr-digests) }}
     steps:
       - name: Login to ${{ env.GITHUB_REGISTRY }}
         uses: docker/login-action@v3
@@ -266,7 +271,7 @@ jobs:
           push-to-registry: true          
 
   attest-dockerhub:
-      needs: merge-manifest
+      needs: collect-digests
       runs-on: ubuntu-latest
       permissions:
         id-token: write
@@ -274,7 +279,7 @@ jobs:
         attestations: write
       strategy:
         matrix:
-          digest: ${{ fromJson(needs.merge-manifest.outputs.collect-dockerhub-digests) }}
+          digest: ${{ fromJson(needs.collect-digests.outputs.collect-dockerhub-digests) }}
       steps:
         - name: Login to ${{ env.DOCKER_REGISTRY }}
           uses: docker/login-action@v3
