@@ -24,7 +24,7 @@ on:
 env:
   GITHUB_REGISTRY: ghcr.io
   DOCKER_REGISTRY: docker.io
-  IMAGE_NAME: coollabsio/minio
+  IMAGE_NAME: ${{ secrets.IMAGE_NAME_OVERRIDE || 'coollabsio/minio' }}
 
 jobs:
   check-release:
@@ -160,8 +160,8 @@ jobs:
           docker buildx imagetools create \
           $TAGS \
           ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-amd64 \
-          ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-arm64
-
+          ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}-arm64  
+                    
       - name: Create & publish manifest on ${{ env.DOCKER_REGISTRY }}
         run: |
           TAGS="-t ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}"
@@ -185,3 +185,111 @@ jobs:
           echo "- GHCR: ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- Docker Hub: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "- Latest: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+
+  collect-digests:
+    needs: 
+      - merge-manifest
+      - check-release
+    runs-on: ubuntu-latest
+    outputs:
+      collect-ghcr-digests: ${{ steps.collect-ghcr-digests.outputs.digests_json }}
+      collect-dockerhub-digests: ${{ steps.collect-dockerhub-digests.outputs.digests_json }}
+    steps:
+      - name: Collect Docker Hub image digests
+        id: collect-dockerhub-digests
+        run: |
+          IMAGE="${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}"
+
+          # Pull raw OCI index
+          RAW=$(docker buildx imagetools inspect --raw "$IMAGE")
+
+          # Get real image digests. If this is a re-run, we may have attestations present,
+          # so filter those out.
+          DIGESTS=$(echo "$RAW" | jq -r '
+            .manifests[]
+            | select(.platform.architecture != null)          # keep manifests with a real platform
+            | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest")  # skip attestations
+            | .digest
+          ')
+
+          JSON=$(printf '%s\n' "$DIGESTS" | jq -R . | jq -s .)          
+
+          # Convert newline-separated list to JSON array for workflow matrix
+          {
+            echo "digests_json<<EOF"
+            echo "$JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Collect GHCR image digests
+        id: collect-ghcr-digests
+        run: |
+          IMAGE="${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.check-release.outputs.version }}"
+
+          # Pull raw OCI index
+          RAW=$(docker buildx imagetools inspect --raw "$IMAGE")
+
+          # Get real image digests. If this is a re-run, we may have attestations present,
+          # so filter those out.
+          DIGESTS=$(echo "$RAW" | jq -r '
+            .manifests[]
+            | select(.platform.architecture != null)          # keep manifests with a real platform
+            | select(.annotations["vnd.docker.reference.type"] != "attestation-manifest")  # skip attestations
+            | .digest
+          ')
+
+          JSON=$(printf '%s\n' "$DIGESTS" | jq -R . | jq -s .)
+
+          # Convert newline-separated list to JSON array for workflow matrix          
+          {
+            echo "digests_json<<EOF"
+            echo "$JSON"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"        
+
+  attest-ghcr:
+    needs: collect-digests
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+      attestations: write
+    strategy:
+      matrix:
+        digest: ${{ fromJson(needs.collect-digests.outputs.collect-ghcr-digests) }}
+    steps:
+      - name: Login to ${{ env.GITHUB_REGISTRY }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GITHUB_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Attest provenance (GHCR)
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.GITHUB_REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ matrix.digest }}
+          push-to-registry: true          
+
+  attest-dockerhub:
+      needs: collect-digests
+      runs-on: ubuntu-latest
+      permissions:
+        id-token: write
+        packages: write
+        attestations: write
+      strategy:
+        matrix:
+          digest: ${{ fromJson(needs.collect-digests.outputs.collect-dockerhub-digests) }}
+      steps:
+        - name: Login to ${{ env.DOCKER_REGISTRY }}
+          uses: docker/login-action@v3
+          with:
+            registry: ${{ env.DOCKER_REGISTRY }}
+            username: ${{ secrets.DOCKERHUB_USERNAME }}
+            password: ${{ secrets.DOCKERHUB_TOKEN }}              
+        - name: Attest provenance (Docker Hub)
+          uses: actions/attest-build-provenance@v1
+          with:
+            subject-name: ${{ env.DOCKER_REGISTRY }}/${{ env.IMAGE_NAME }}
+            subject-digest: ${{ matrix.digest }}
+            push-to-registry: true                    
